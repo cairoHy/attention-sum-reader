@@ -11,7 +11,7 @@ from attention_sum_reader import AttentionSumReader
 
 # 基础参数
 tf.app.flags.DEFINE_bool(flag_name="debug",
-                         default_value=True,
+                         default_value=False,
                          docstring="是否在debug模式")
 
 tf.app.flags.DEFINE_bool(flag_name="train",
@@ -176,7 +176,7 @@ def train_and_test():
         logging.info("Start testing.Testing in {} samples.".format(len(test_answers)))
         model.test(test_data=(test_documents, test_questions, test_answers, test_candidates),
                    batch_size=FLAGS.batch_size)
-        
+
 
 def clear():
     """

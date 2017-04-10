@@ -8,7 +8,7 @@ import time
 import keras.backend as K
 import numpy as np
 import tensorflow as tf
-from keras.callbacks import TensorBoard, LambdaCallback
+from keras.callbacks import TensorBoard, LambdaCallback, EarlyStopping
 from keras.engine import Input, Model
 from keras.layers import GRU, LSTM, Bidirectional, Embedding, Lambda, Activation, Multiply
 from keras.optimizers import SGD, Adam
@@ -57,7 +57,8 @@ class AttentionSumReader(object):
         q_encode = Embedding(input_dim=self.vocab_size,
                              output_dim=embedding_dim,
                              weights=[embedding_matrix],
-                             mask_zero=True)(q_input)
+                             mask_zero=True,
+                             )(q_input)
         for i in range(1, num_layers):
             q_encode = Bidirectional(self.rnn_cell(units=hidden_size,
                                                    name="{}-{}-{}".format("q-encoder", self.cell_name, i),
@@ -144,17 +145,22 @@ class AttentionSumReader(object):
         """
         模型训练。
         """
-        checkpointer = LambdaCallback(
-            on_epoch_end=lambda epoch, e_logs:
-            self.model.save_weights(filepath="{}-{}.h5".format(self.weight_path, epoch)),
-            on_train_end=lambda e_logs:
-            self.model.save_weights(filepath="{}.h5".format(self.weight_path)))
+
+        def save_weight_on_epoch_end(epoch, e_logs):
+            filename = "{}weight-epoch{}-{}-{}.h5".format(self.weight_path,
+                                                          time.strftime("%Y-%m-%d-(%H-%M)", time.localtime()),
+                                                          epoch,
+                                                          e_logs['val_acc'])
+            self.model.save_weights(filepath=filename)
+
+        checkpointer = LambdaCallback(on_epoch_end=save_weight_on_epoch_end)
 
         tensorboard = TensorBoard(log_dir="./logs", histogram_freq=1, write_images=True)
+        earlystopping = EarlyStopping(monitor="val_loss", patience=3, verbose=1)
 
         # 对输入进行预处理
         questions_ok, documents_ok, context_mask, candidates_ok, y_true = self.preprocess_input_sequences(train_data)
-        # v_documents, v_questions, v_answers, v_candidates = valid_data
+        v_questions, v_documents, v_context_mask, v_candidates, v_y_true = self.preprocess_input_sequences(valid_data)
         if opt_name == "SGD":
             optimizer = SGD(lr=lr, decay=1e-6, clipvalue=grad_clip)
         elif opt_name == "ADAM":
@@ -166,28 +172,44 @@ class AttentionSumReader(object):
                            metrics=["accuracy"])
 
         # 载入之前训练的权重
-        if os.path.exists(self.weight_path + ".h5"):
-            self.model.load_weights(filepath=self.weight_path + ".h5", by_name=True)
+        self.load_weight()
 
         data = {"q_input": questions_ok,
                 "d_input": documents_ok,
                 "context_mask": context_mask,
                 "candidates_bi": candidates_ok}
+        v_data = {"q_input": v_questions,
+                  "d_input": v_documents,
+                  "context_mask": v_context_mask,
+                  "candidates_bi": v_candidates}
         logs = self.model.fit(x=data,
                               y=y_true,
                               batch_size=batch_size,
                               epochs=epochs,
-                              validation_split=0.1,
-                              callbacks=[checkpointer, tensorboard])
+                              validation_data=(v_data, v_y_true),
+                              callbacks=[checkpointer, tensorboard, earlystopping])
 
-    def test(self, test_data):
+    def test(self, test_data, batch_size):
+        # 载入之前训练的权重
+        self.load_weight()
+
         # 对输入进行预处理
         questions_ok, documents_ok, context_mask, candidates_ok, y_true = self.preprocess_input_sequences(test_data)
         data = {"q_input": questions_ok,
                 "d_input": documents_ok,
                 "context_mask": context_mask,
                 "candidates_bi": candidates_ok}
-        self.model.predict(x=data, batch_size=1)
+
+        y_pred = self.model.predict(x=data, batch_size=batch_size)
+        logging.info("Predictions is :{}".format(y_pred))
+        test_acc = np.count_nonzero(np.equal(np.argmax(y_pred, axis=-1), np.zeros(len(y_pred)))) / len(y_pred)
+        logging.info("Test accuracy is {}".format(test_acc))
+        return test_acc
+
+    def load_weight(self):
+        if os.path.exists(self.weight_path + "weight.h5"):
+            logging.info("Load pre-trained weights:")
+            self.model.load_weights(filepath=self.weight_path + "weight.h5", by_name=True)
 
     @staticmethod
     def union_shuffle(data):

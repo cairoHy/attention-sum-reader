@@ -1,5 +1,7 @@
+import json
 import logging
 import os
+import time
 
 import numpy as np
 import tensorflow as tf
@@ -9,12 +11,16 @@ from attention_sum_reader import AttentionSumReader
 
 # 基础参数
 tf.app.flags.DEFINE_bool(flag_name="debug",
-                         default_value=False,
+                         default_value=True,
                          docstring="是否在debug模式")
 
-tf.app.flags.DEFINE_bool(flag_name="test_only",
-                         default_value=False,
-                         docstring="只进行测试，不训练")
+tf.app.flags.DEFINE_bool(flag_name="train",
+                         default_value=True,
+                         docstring="进行训练")
+
+tf.app.flags.DEFINE_bool(flag_name="test",
+                         default_value=True,
+                         docstring="进行测试")
 
 tf.app.flags.DEFINE_integer(flag_name="random_seed",
                             default_value=1007,
@@ -25,7 +31,7 @@ tf.app.flags.DEFINE_string(flag_name="log_file",
                            docstring="是否将日志存储在文件中")
 
 tf.app.flags.DEFINE_string(flag_name="weight_path",
-                           default_value="model/weight",
+                           default_value="model/",
                            docstring="之前训练的模型权重")
 
 # 定义数据源
@@ -50,7 +56,7 @@ tf.app.flags.DEFINE_string(flag_name="test_file",
                            docstring="CBT的测试文件")
 
 tf.app.flags.DEFINE_string(flag_name="embedding_file",
-                           default_value="D:/source/data/embedding/glove.6B/glove.6B.100d.txt",
+                           default_value="D:/source/data/embedding/glove.6B/glove.6B.200d.txt",
                            docstring="glove预训练的词向量文件")
 
 tf.app.flags.DEFINE_integer(flag_name="max_vocab_num",
@@ -58,19 +64,19 @@ tf.app.flags.DEFINE_integer(flag_name="max_vocab_num",
                             docstring="词库中存储的单词最大个数")
 
 tf.app.flags.DEFINE_integer(flag_name="d_len_min",
-                            default_value=400,
+                            default_value=310,
                             docstring="载入样本中文档的最小长度")
 
 tf.app.flags.DEFINE_integer(flag_name="d_len_max",
-                            default_value=450,
+                            default_value=400,
                             docstring="载入样本中文档的最大长度")
 
 tf.app.flags.DEFINE_integer(flag_name="q_len_min",
-                            default_value=15,
+                            default_value=20,
                             docstring="载入样本中问题的最小长度")
 
 tf.app.flags.DEFINE_integer(flag_name="q_len_max",
-                            default_value=35,
+                            default_value=40,
                             docstring="载入样本中问题的最大长度")
 
 # 模型超参数
@@ -88,11 +94,11 @@ tf.app.flags.DEFINE_bool(flag_name="use_lstm",
 
 # 模型训练超参数
 tf.app.flags.DEFINE_integer(flag_name="embedding_dim",
-                            default_value=100,
+                            default_value=200,
                             docstring="词向量维度")
 
 tf.app.flags.DEFINE_integer(flag_name="batch_size",
-                            default_value=16,
+                            default_value=32,
                             docstring="batch_size")
 
 tf.app.flags.DEFINE_integer(flag_name="num_epoches",
@@ -118,7 +124,7 @@ tf.app.flags.DEFINE_integer(flag_name="grad_clipping",
 FLAGS = tf.app.flags.FLAGS
 
 
-def train():
+def train_and_test():
     # 准备数据
     vocab_file, idx_train_file, idx_valid_file, idx_test_file = data_utils.prepare_cbt_data(
         FLAGS.data_dir, FLAGS.train_file, FLAGS.valid_file, FLAGS.test_file, FLAGS.max_vocab_num,
@@ -132,9 +138,9 @@ def train():
                                                                                 q_len_range,
                                                                                 max_count=FLAGS.max_count)
     v_documents, v_questions, v_answers, v_candidates = data_utils.read_cbt_data(idx_valid_file,
-                                                                                 d_len_range,
-                                                                                 q_len_range,
                                                                                  max_count=FLAGS.max_count)
+    test_documents, test_questions, test_answers, test_candidates = data_utils.read_cbt_data(idx_test_file,
+                                                                                             max_count=FLAGS.max_count)
     d_len = data_utils.get_max_length(t_documents)
     q_len = data_utils.get_max_length(t_questions)
 
@@ -150,6 +156,13 @@ def train():
         model = AttentionSumReader(word_dict, embedding_matrix, d_len, q_len,
                                    FLAGS.embedding_dim, FLAGS.hidden_size, FLAGS.num_layers,
                                    FLAGS.weight_path, FLAGS.use_lstm)
+    else:
+        # 使用tensorflow版本的模型
+        with tf.Session():
+            model = None
+            exit(0)
+
+    if FLAGS.train:
         logging.info("Start training.")
         model.train(train_data=(t_documents, t_questions, t_answer, t_candidates),
                     valid_data=(v_documents, v_questions, v_answers, v_candidates),
@@ -158,15 +171,12 @@ def train():
                     opt_name=FLAGS.optimizer,
                     lr=FLAGS.learning_rate,
                     grad_clip=FLAGS.grad_clipping)
-    else:
-        # 使用tensorflow版本的模型
-        with tf.Session():
-            pass
 
-
-def test():
-    pass
-
+    if FLAGS.test:
+        logging.info("Start testing.Testing in {} samples.".format(len(test_answers)))
+        model.test(test_data=(test_documents, test_questions, test_answers, test_candidates),
+                   batch_size=FLAGS.batch_size)
+        
 
 def clear():
     """
@@ -178,10 +188,13 @@ def clear():
         tf.gfile.DeleteRecursively(tmp_dir)
 
 
+def save_arguments(args, file):
+    with open(file, "w") as fp:
+        json.dump(args, fp, sort_keys=True, indent=4)
+
+
 def main(_):
-    if not FLAGS.test_only:
-        train()
-    test()
+    train_and_test()
 
 
 if __name__ == '__main__':
@@ -194,4 +207,8 @@ if __name__ == '__main__':
     logging.basicConfig(filename=FLAGS.log_file,
                         filemode='w', level=logging.DEBUG,
                         format='%(asctime)s %(message)s', datefmt='%y-%m-%d %H:%M')
+    save_arguments(FLAGS.__flags, "{}args-{}.json".format(FLAGS.weight_path,
+                                                          time.strftime("%Y-%m-%d-(%H-%M)",
+                                                                        time.localtime())))
+    logging.info(FLAGS.__flags)
     tf.app.run()

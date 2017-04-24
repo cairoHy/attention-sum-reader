@@ -8,7 +8,7 @@ import time
 import keras.backend as K
 import numpy as np
 import tensorflow as tf
-from keras.callbacks import TensorBoard, LambdaCallback, EarlyStopping
+from keras.callbacks import LambdaCallback, EarlyStopping
 from keras.engine import Input, Model
 from keras.layers import GRU, LSTM, Bidirectional, Embedding, Lambda, Activation, Multiply
 from keras.optimizers import SGD, Adam
@@ -68,6 +68,7 @@ class AttentionSumReader(object):
                                                    return_sequences=True),
                                      merge_mode="concat", dtype="float32")(q_encode)
         # q_encoder output shape: (None, hidden_size * 2)
+        # TODO: 用最后一步的隐层状态表示q
         q_encode = Bidirectional(self.rnn_cell(units=hidden_size,
                                                name="{}-{}-{}".format("q-encoder", self.cell_name, num_layers),
                                                kernel_initializer="glorot_uniform",
@@ -155,7 +156,7 @@ class AttentionSumReader(object):
 
         checkpointer = LambdaCallback(on_epoch_end=save_weight_on_epoch_end)
 
-        tensorboard = TensorBoard(log_dir="./logs", histogram_freq=1, write_images=True)
+        # tensorboard = TensorBoard(log_dir="./logs", histogram_freq=1, write_images=True)
         earlystopping = EarlyStopping(monitor="val_loss", patience=3, verbose=1)
 
         # 对输入进行预处理
@@ -187,12 +188,9 @@ class AttentionSumReader(object):
                               batch_size=batch_size,
                               epochs=epochs,
                               validation_data=(v_data, v_y_true),
-                              callbacks=[checkpointer, tensorboard, earlystopping])
+                              callbacks=[checkpointer, earlystopping])
 
     def test(self, test_data, batch_size):
-        # 载入之前训练的权重
-        self.load_weight()
-
         # 对输入进行预处理
         questions_ok, documents_ok, context_mask, candidates_ok, y_true = self.preprocess_input_sequences(test_data)
         data = {"q_input": questions_ok,
@@ -201,15 +199,16 @@ class AttentionSumReader(object):
                 "candidates_bi": candidates_ok}
 
         y_pred = self.model.predict(x=data, batch_size=batch_size)
-        logging.info("Predictions is :{}".format(y_pred))
-        test_acc = np.count_nonzero(np.equal(np.argmax(y_pred, axis=-1), np.zeros(len(y_pred)))) / len(y_pred)
+        acc_num = np.count_nonzero(np.equal(np.argmax(y_pred, axis=-1), np.zeros(len(y_pred))))
+        test_acc = acc_num / len(y_pred)
         logging.info("Test accuracy is {}".format(test_acc))
-        return test_acc
+        return acc_num, test_acc
 
-    def load_weight(self):
-        if os.path.exists(self.weight_path + "weight.h5"):
-            logging.info("Load pre-trained weights:")
-            self.model.load_weights(filepath=self.weight_path + "weight.h5", by_name=True)
+    def load_weight(self, weight_path=None):
+        weight_file = self.weight_path if not weight_path else weight_path
+        if os.path.exists(weight_file + "weight.h5"):
+            logging.info("Load pre-trained weights:{}".format(weight_file + "weight.h5"))
+            self.model.load_weights(filepath=weight_file + "weight.h5", by_name=True)
 
     @staticmethod
     def union_shuffle(data):
@@ -218,14 +217,14 @@ class AttentionSumReader(object):
         random.shuffle(c)
         return zip(*c)
 
-    def preprocess_input_sequences(self, data):
+    def preprocess_input_sequences(self, data, shuffle=True):
         """
         预处理输入：
         shuffle
         PAD/TRUNC到固定长度的序列
         y_true是长度为self.A_len的向量，index=0为正确答案，one-hot编码
         """
-        documents, questions, answer, candidates = self.union_shuffle(data)
+        documents, questions, answer, candidates = self.union_shuffle(data) if shuffle else data
         d_lens = [len(i) for i in documents]
 
         questions_ok = pad_sequences(questions, maxlen=self.q_len, dtype="int32", padding="post", truncating="post")

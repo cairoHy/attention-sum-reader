@@ -94,7 +94,7 @@ def gen_embeddings(word_dict, embed_dim, in_file=None, init=np.zeros):
     :return: 词向量矩阵。
     """
     num_words = max(word_dict.values()) + 1
-    embedding_matrix = init((num_words, embed_dim))
+    embedding_matrix = init(-0.1, 0.1, (num_words, embed_dim))
     logging.info('Embeddings: %d x %d' % (num_words, embed_dim))
 
     if not in_file:

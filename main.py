@@ -7,6 +7,7 @@ import numpy as np
 import tensorflow as tf
 
 import data_utils
+from as_reader_tf import AttentionSumReaderTf
 from attention_sum_reader import AttentionSumReader
 
 # 基础参数
@@ -19,8 +20,12 @@ tf.app.flags.DEFINE_bool(flag_name="train",
                          docstring="进行训练")
 
 tf.app.flags.DEFINE_bool(flag_name="test",
-                         default_value=True,
+                         default_value=False,
                          docstring="进行测试")
+
+tf.app.flags.DEFINE_bool(flag_name="ensemble",
+                         default_value=False,
+                         docstring="进行集成模型的测试")
 
 tf.app.flags.DEFINE_integer(flag_name="random_seed",
                             default_value=1007,
@@ -33,6 +38,10 @@ tf.app.flags.DEFINE_string(flag_name="log_file",
 tf.app.flags.DEFINE_string(flag_name="weight_path",
                            default_value="model/",
                            docstring="之前训练的模型权重")
+
+tf.app.flags.DEFINE_string(flag_name="framework",
+                           default_value="tensorflow",
+                           docstring="使用的模型框架，“tensorflow”或者“keras”")
 
 # 定义数据源
 tf.app.flags.DEFINE_string(flag_name="data_dir",
@@ -64,19 +73,19 @@ tf.app.flags.DEFINE_integer(flag_name="max_vocab_num",
                             docstring="词库中存储的单词最大个数")
 
 tf.app.flags.DEFINE_integer(flag_name="d_len_min",
-                            default_value=310,
+                            default_value=0,
                             docstring="载入样本中文档的最小长度")
 
 tf.app.flags.DEFINE_integer(flag_name="d_len_max",
-                            default_value=400,
+                            default_value=1500,
                             docstring="载入样本中文档的最大长度")
 
 tf.app.flags.DEFINE_integer(flag_name="q_len_min",
-                            default_value=20,
+                            default_value=0,
                             docstring="载入样本中问题的最小长度")
 
 tf.app.flags.DEFINE_integer(flag_name="q_len_max",
-                            default_value=40,
+                            default_value=60,
                             docstring="载入样本中问题的最大长度")
 
 # 模型超参数
@@ -85,7 +94,7 @@ tf.app.flags.DEFINE_integer(flag_name="hidden_size",
                             docstring="RNN隐层数量")
 
 tf.app.flags.DEFINE_integer(flag_name="num_layers",
-                            default_value=3,
+                            default_value=1,
                             docstring="RNN层数")
 
 tf.app.flags.DEFINE_bool(flag_name="use_lstm",
@@ -122,6 +131,9 @@ tf.app.flags.DEFINE_integer(flag_name="grad_clipping",
                             docstring="梯度截断的阈值，防止RNN梯度爆炸")
 
 FLAGS = tf.app.flags.FLAGS
+# bucket，用来处理序列长度方差过大问题
+d_bucket = ([150, 310], [310, 400], [450, 600], [600, 750], [750, 950])
+q_bucket = (20, 40)
 
 
 def train_and_test():
@@ -138,6 +150,8 @@ def train_and_test():
                                                                                 q_len_range,
                                                                                 max_count=FLAGS.max_count)
     v_documents, v_questions, v_answers, v_candidates = data_utils.read_cbt_data(idx_valid_file,
+                                                                                 d_len_range,
+                                                                                 q_len_range,
                                                                                  max_count=FLAGS.max_count)
     test_documents, test_questions, test_answers, test_candidates = data_utils.read_cbt_data(idx_test_file,
                                                                                              max_count=FLAGS.max_count)
@@ -147,20 +161,24 @@ def train_and_test():
     logging.info("-" * 50)
     logging.info("Building model with {} layers of {} units.".format(FLAGS.num_layers, FLAGS.hidden_size))
 
-    # 初始化词向量矩阵
+    # 初始化词向量矩阵，使用(-0.1,0.1)区间内的随机均匀分布
     word_dict = data_utils.load_vocab(vocab_file)
-    embedding_matrix = data_utils.gen_embeddings(word_dict, FLAGS.embedding_dim, FLAGS.embedding_file)
+    embedding_matrix = data_utils.gen_embeddings(word_dict,
+                                                 FLAGS.embedding_dim,
+                                                 FLAGS.embedding_file,
+                                                 init=np.random.uniform)
 
-    if True:
+    if FLAGS.framework == "keras":
         # 使用keras版本的模型
         model = AttentionSumReader(word_dict, embedding_matrix, d_len, q_len,
                                    FLAGS.embedding_dim, FLAGS.hidden_size, FLAGS.num_layers,
                                    FLAGS.weight_path, FLAGS.use_lstm)
     else:
         # 使用tensorflow版本的模型
-        with tf.Session():
-            model = None
-            exit(0)
+        sess = tf.Session()
+        model = AttentionSumReaderTf(word_dict, embedding_matrix, d_len, q_len, sess,
+                                     FLAGS.embedding_dim, FLAGS.hidden_size, FLAGS.num_layers,
+                                     FLAGS.weight_path, FLAGS.use_lstm)
 
     if FLAGS.train:
         logging.info("Start training.")
@@ -173,9 +191,55 @@ def train_and_test():
                     grad_clip=FLAGS.grad_clipping)
 
     if FLAGS.test:
-        logging.info("Start testing.Testing in {} samples.".format(len(test_answers)))
+        logging.info("Start testing.\nTesting in {} samples.".format(len(test_answers)))
+        model.load_weight()
         model.test(test_data=(test_documents, test_questions, test_answers, test_candidates),
                    batch_size=FLAGS.batch_size)
+    if FLAGS.ensemble:
+        logging.info("Start ensemble testing.\nTesting in {} samples.".format(len(test_answers)))
+        models = get_ensemble_model(word_dict, embedding_matrix, FLAGS.hidden_size, FLAGS.num_layers, FLAGS.use_lstm)
+        ensemble_test((test_documents, test_questions, test_answers, test_candidates), models)
+
+
+def ensemble_test(test_data, models):
+    data = [[] for _ in d_bucket]
+    for test_document, test_question, test_answer, test_candidate in zip(*test_data):
+        if len(test_document) <= d_bucket[0][0]:
+            data[0].append((test_document, test_question, test_answer, test_candidate))
+            continue
+        if len(test_document) >= d_bucket[-1][-1]:
+            data[len(models) - 1].append((test_document, test_question, test_answer, test_candidate))
+            continue
+        for bucket_id, (d_min, d_max) in enumerate(d_bucket):
+            if d_min < len(test_document) < d_max:
+                data[bucket_id].append((test_document, test_question, test_answer, test_candidate))
+                continue
+
+    acc, num = 0, 0
+    for i in range(len(models)):
+        num += len(data[i])
+        logging.info("Start testing.\nTesting in {} samples.".format(len(data[i])))
+        acc_i, _ = models[i].test(zip(*data[i]), batch_size=1)
+        acc += acc_i
+    logging.critical("Ensemble test done.\nAccuracy is {}".format(acc / num))
+
+
+def get_ensemble_model(word_dict,
+                       embedding_matrix,
+                       hidden_size,
+                       num_layers,
+                       use_lstm):
+    embedding_dim = len(embedding_matrix[0])
+    models = {}
+    for b_id, r in enumerate(d_bucket):
+        weight_path = "{}{}-{}-{}-{}/".format(FLAGS.weight_path, r[0], r[1], q_bucket[0], q_bucket[1])
+        model = AttentionSumReader(word_dict, embedding_matrix, r[1], q_bucket[1],
+                                   embedding_dim, hidden_size, num_layers,
+                                   weight_path, use_lstm)
+        logging.info(weight_path)
+        model.load_weight(weight_path)
+        models[b_id] = model
+    return models
 
 
 def clear():

@@ -127,6 +127,5 @@ logs/
 .idea/
 test.ipynb
 test_model.py
-as_reader_tf.py
 model/
 attention_sum_reader.py.png

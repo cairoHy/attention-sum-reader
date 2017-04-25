@@ -1,5 +1,6 @@
 import logging
 import random
+import sys
 # noinspection PyUnresolvedReferences
 import time
 
@@ -141,7 +142,8 @@ class AttentionSumReaderTf(object):
         # 计算准确率
         self.correct_prediction = tf.reduce_sum(tf.sign(tf.cast(tf.equal(tf.argmax(self.y_hat, 1),
                                                                          tf.argmax(self.y_true, 1)), "float")))
-        self.accuracy = tf.reduce_mean(tf.cast(self.correct_prediction, "float"))
+        # 模型序列化工具
+        self.saver = tf.train.Saver()
 
     # noinspection PyUnusedLocal
     def train(self, train_data, valid_data, batch_size, epochs, opt_name, lr, grad_clip):
@@ -167,16 +169,10 @@ class AttentionSumReaderTf(object):
             if grad is not None else (grad, var)
             for grad, var in grad_vars]
         train_op = optimizer.apply_gradients(grad_vars)
-        saver = tf.train.Saver()
         self.sess.run(tf.global_variables_initializer())
 
         # 载入之前训练的模型
-        ckpt = tf.train.get_checkpoint_state('model/')
-        if ckpt is not None:
-            logging.info("Load model from {}.".format(ckpt.model_checkpoint_path))
-            saver.restore(self.sess, ckpt.model_checkpoint_path)
-        else:
-            logging.info("No previous models.")
+        self.load_weight()
 
         # 准备验证集数据
         v_data = {self.q_input: v_questions,
@@ -185,12 +181,14 @@ class AttentionSumReaderTf(object):
                   self.candidates_bi: v_candidates,
                   self.y_true: v_y_true}
 
+        # early stopping 参数
+        best_val_loss, best_val_acc, patience, lose_times = sys.maxsize, 0, 5, 0
         # 开始训练
         corrects_in_epoch, loss_in_epoch = 0, 0
         batch_num, v_batch_num = len(questions_ok) // batch_size, len(v_questions) // batch_size
         batch_idx, v_batch_idx = np.random.permutation(batch_num), np.arange(v_batch_num)
         logging.info("Train on {} batches, {} samples per batch.".format(batch_num, batch_size))
-        logging.info("Validate on {} samples, {} samples per batch.".format(v_batch_num, batch_size))
+        logging.info("Validate on {} batches, {} samples per batch.".format(v_batch_num, batch_size))
         for step in range(batch_num * epochs):
             # 一个Epoch结束，输出log并shuffle
             if step % batch_num == 0:
@@ -207,17 +205,18 @@ class AttentionSumReaderTf(object):
                     self.candidates_bi: candidates_ok[_slice],
                     self.y_true: y_true[_slice]}
             # 训练、更新参数,输出当前Epoch的准确率
-            loss_, _, corrects_in_batch = self.sess.run([self.loss, train_op, self.correct_prediction], feed_dict=data)
+            loss_, _, corrects_in_batch = self.sess.run([self.loss, train_op, self.correct_prediction],
+                                                        feed_dict=data)
             corrects_in_epoch += corrects_in_batch
             loss_in_epoch += loss_ * batch_size
             nums_in_epoch = (step % batch_num + 1) * batch_size
             logging.info("Trained samples in this epoch : {}".format(nums_in_epoch))
-            logging.info("Step : {}/{}.\nLoss : {}.\nAccuracy : {}".format(step % batch_num,
-                                                                           batch_num,
-                                                                           loss_in_epoch / nums_in_epoch,
-                                                                           corrects_in_epoch / nums_in_epoch))
+            logging.info("Step : {}/{}.\nLoss : {:.4f}.\nAccuracy : {:.4f}".format(step % batch_num,
+                                                                                   batch_num,
+                                                                                   loss_in_epoch / nums_in_epoch,
+                                                                                   corrects_in_epoch / nums_in_epoch))
 
-            # 每200步保存模型并使用验证集计算准确率
+            # 每200步保存模型并使用验证集计算准确率，同时判断是否early stop
             if step % 200 == 0 and step != 0:
                 # 由于GPU显存不够，仍然按batch计算
                 val_num, val_corrects, v_loss = 0, 0, 0
@@ -235,22 +234,53 @@ class AttentionSumReaderTf(object):
                     val_corrects = val_corrects + v_correct
                     v_loss = v_loss + loss_ * batch_size
                 val_acc = val_corrects / val_num
-                logging.info("Val acc : {}".format(val_acc))
-                logging.info("Val Loss : {}".format(v_loss / val_num))
-                path = saver.save(self.sess, 'model/machine_reading-val_acc-{}.model'.format(val_acc), global_step=step)
-                logging.info("Save model to {}.".format(path))
+                val_loss = v_loss / val_num
+                logging.info("Val acc : {:.4f}".format(val_acc))
+                logging.info("Val Loss : {:.4f}".format(val_loss))
+                if val_acc > best_val_acc or val_loss < best_val_loss:
+                    # 保存更好的模型
+                    lose_times = 0
+                    path = self.saver.save(self.sess,
+                                           'model/machine_reading-val_acc-{:.4f}.model'.format(val_acc),
+                                           global_step=step)
+                    logging.info("Save model to {}.".format(path))
+                else:
+                    lose_times += 1
+                    logging.info("Lose_time/Patience : {}/{} .".format(lose_times, patience))
+                    if lose_times >= patience:
+                        logging.info("Oh u, stop training.".format(lose_times, patience))
+                        exit(0)
 
     def test(self, test_data, batch_size):
         # 对输入进行预处理
         questions_ok, documents_ok, context_mask, candidates_ok, y_true = self.preprocess_input_sequences(test_data)
-        data = {"q_input": questions_ok,
-                "d_input": documents_ok,
-                "context_mask": context_mask,
-                "candidates_bi": candidates_ok}
-        logging.info(data, batch_size)
+        logging.info("Test on {} samples, {} per batch.".format(len(questions_ok), batch_size))
+
+        # 测试
+        batch_num = len(questions_ok) // batch_size
+        batch_idx = np.arange(batch_num)
+        correct_num, total_num = 0, 0
+        for i in range(batch_num):
+            start = batch_idx[i % batch_num] * batch_size
+            stop = (batch_idx[i % batch_num] + 1) * batch_size
+            _slice = np.index_exp[start:stop]
+            data = {self.q_input: questions_ok[_slice],
+                    self.d_input: documents_ok[_slice],
+                    self.context_mask_bt: context_mask[_slice],
+                    self.candidates_bi: candidates_ok[_slice],
+                    self.y_true: y_true[_slice]}
+            correct, = self.sess.run([self.correct_prediction], feed_dict=data)
+            correct_num, total_num = correct_num + correct, total_num + batch_size
+        test_acc = correct_num / total_num
+        logging.info("Test accuracy is : {:.5f}".format(test_acc))
 
     def load_weight(self):
-        pass
+        ckpt = tf.train.get_checkpoint_state('model/')
+        if ckpt is not None:
+            logging.info("Load model from {}.".format(ckpt.model_checkpoint_path))
+            self.saver.restore(self.sess, ckpt.model_checkpoint_path)
+        else:
+            logging.info("No previous models.")
 
     @staticmethod
     def union_shuffle(data):

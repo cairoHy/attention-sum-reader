@@ -65,7 +65,7 @@ tf.app.flags.DEFINE_string(flag_name="test_file",
                            docstring="CBT的测试文件")
 
 tf.app.flags.DEFINE_string(flag_name="embedding_file",
-                           default_value="D:/source/data/embedding/glove.6B/glove.6B.200d.txt",
+                           default_value="D:/source/data/embedding/glove.6B/glove.6B.300d.txt",
                            docstring="glove预训练的词向量文件")
 
 tf.app.flags.DEFINE_integer(flag_name="max_vocab_num",
@@ -77,7 +77,7 @@ tf.app.flags.DEFINE_integer(flag_name="d_len_min",
                             docstring="载入样本中文档的最小长度")
 
 tf.app.flags.DEFINE_integer(flag_name="d_len_max",
-                            default_value=1500,
+                            default_value=2000,
                             docstring="载入样本中文档的最大长度")
 
 tf.app.flags.DEFINE_integer(flag_name="q_len_min",
@@ -85,12 +85,12 @@ tf.app.flags.DEFINE_integer(flag_name="q_len_min",
                             docstring="载入样本中问题的最小长度")
 
 tf.app.flags.DEFINE_integer(flag_name="q_len_max",
-                            default_value=60,
+                            default_value=200,
                             docstring="载入样本中问题的最大长度")
 
 # 模型超参数
 tf.app.flags.DEFINE_integer(flag_name="hidden_size",
-                            default_value=128,
+                            default_value=384,
                             docstring="RNN隐层数量")
 
 tf.app.flags.DEFINE_integer(flag_name="num_layers",
@@ -103,7 +103,7 @@ tf.app.flags.DEFINE_bool(flag_name="use_lstm",
 
 # 模型训练超参数
 tf.app.flags.DEFINE_integer(flag_name="embedding_dim",
-                            default_value=200,
+                            default_value=300,
                             docstring="词向量维度")
 
 tf.app.flags.DEFINE_integer(flag_name="batch_size",
@@ -123,7 +123,7 @@ tf.app.flags.DEFINE_string(flag_name="optimizer",
                            docstring="优化算法：SGD或者ADAM或者RMSprop")
 
 tf.app.flags.DEFINE_float(flag_name="learning_rate",
-                          default_value=0.001,
+                          default_value=0.005,
                           docstring="SGD的学习率")
 
 tf.app.flags.DEFINE_integer(flag_name="grad_clipping",

@@ -124,14 +124,16 @@ class AttentionSumReader(object):
             result = tf.scan(
                 fn=lambda previous, x: sum_prob_of_word(x, sentence_ixs_t, sentence_attention_probs_t),
                 elems=[candidate_indices_i],
-                initializer=tf.constant(0., dtype="float32"))
+                initializer=K.constant(0., dtype="float32"),
+                swap_memory=True)
             return result
 
         def sum_probs_batch(candidate_indices_bi, sentence_ixs_bt, sentence_attention_probs_bt):
             result = tf.scan(
                 fn=sum_probs_single_sentence,
                 elems=[candidate_indices_bi, sentence_ixs_bt, sentence_attention_probs_bt],
-                initializer=tf.Variable([0] * self.A_len, dtype="float32"))
+                initializer=K.variable([0] * self.A_len, dtype="float32"),
+                swap_memory=True)
             return result
 
         # output shape: (None, i) i = max_candidate_length = 10

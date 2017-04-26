@@ -240,6 +240,7 @@ class AttentionSumReaderTf(object):
                 if val_acc > best_val_acc or val_loss < best_val_loss:
                     # 保存更好的模型
                     lose_times = 0
+                    best_val_loss, best_val_acc = val_loss, val_acc
                     path = self.saver.save(self.sess,
                                            'model/machine_reading-val_acc-{:.4f}.model'.format(val_acc),
                                            global_step=step)

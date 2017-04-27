@@ -262,6 +262,8 @@ def main(_):
 
 
 if __name__ == '__main__':
+    if not os.path.exists(FLAGS.weight_path):
+        os.mkdir(FLAGS.weight_path)
     # 设置随机数种子
     np.random.seed(FLAGS.random_seed)
     tf.set_random_seed(FLAGS.random_seed)
@@ -269,7 +271,7 @@ if __name__ == '__main__':
     FLAGS.num_epoches_new = 2 if FLAGS.debug else FLAGS.num_epoches
     # 设置Log
     logging.basicConfig(filename=FLAGS.log_file,
-                        filemode='w', level=logging.DEBUG,
+                        level=logging.DEBUG,
                         format='%(asctime)s %(message)s', datefmt='%y-%m-%d %H:%M')
     save_arguments(FLAGS.__flags, "{}args-{}.json".format(FLAGS.weight_path,
                                                           time.strftime("%Y-%m-%d-(%H-%M)",

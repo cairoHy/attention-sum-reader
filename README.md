@@ -34,4 +34,6 @@ You can now train the model by entering the following command.
 For the algorithm details, see the paper. And for other detail in the code, see the README of the original implementation.
 
 
+## migration
 
+This repo is not updated now, go to [github.com/zhanghaoyu1993/RC-experiments](github.com/zhanghaoyu1993/RC-experiments) for new models.

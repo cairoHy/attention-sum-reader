@@ -36,4 +36,4 @@ For the algorithm details, see the paper. And for other detail in the code, see 
 
 ## migration
 
-This repo is not updated now, go to [github.com/zhanghaoyu1993/RC-experiments](github.com/zhanghaoyu1993/RC-experiments) for new models.
+This repo is not updated now, go to [github.com/cairohy/RC-experiments](github.com/cairohy/RC-experiments) for new models.
